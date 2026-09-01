@@ -1,3 +1,6 @@
 jupyterlab
 numpy
 polars
+matplotlib
+joblib
+tqdm
