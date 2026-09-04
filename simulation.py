@@ -70,7 +70,7 @@ def main():
     human_utility_flags = [True, False]
     human_betas = [1.5, 0.5]
     algorithm_betas = [1.5]
-    algorithm_alphas = [1.5, 0.0]
+    algorithm_alphas = [0.85]
     algorithm_sigmas = [1.5]
     p_penalty = 0.321
     algo_k = 2
