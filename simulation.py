@@ -84,7 +84,7 @@ def load_combos(
                 )
 
 def main():
-    distances_path = "data/pref_distances.pickle"
+    distances_path = "./data/pref_distances.pickle"
     sushi_path = "./data/sushi3.idata"
     utilities_output_path = "./data/diversity_utilities"
 
