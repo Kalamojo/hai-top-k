@@ -1,7 +1,8 @@
 import polars as pl
 import numpy as np
+import numpy.typing as npt
 import pickle
-import itertools
+from itertools import product
 from joblib import Parallel, delayed
 from tqdm import tqdm
 import uuid
@@ -33,7 +34,54 @@ def prep_sushi(
 def path_provider(args: pl.FileProviderArgs):
     assert args.index_in_partition == 0
 
-    return f"Distance_{args.partition_keys.cast(pl.String).item()}/{uuid.uuid4().hex}.parquet"
+    return f"Distance_{
+            args.partition_keys.cast(pl.String).item()
+        }/{
+            uuid.uuid4().hex
+        }.parquet"
+
+def process_combo(
+        human_ranks: list[int], algo_ranks: list[int], distance: int,
+        use_human_utility: bool, human_beta: float, algo_beta: float,
+        algo_alpha: float, algo_sigma: float, universe: list[int],
+        algo_k: int, p_penalty: float, sushi_arr: npt.NDArray[np.float64],
+        k: int
+    ):
+    utility_arr = np.zeros(11)
+    if use_human_utility:
+        utility_arr[human_ranks[0]] = 1
+    else:
+        utility_arr[algo_ranks[0]] = 1
+
+    human = TopKMallows(
+        center=human_ranks, k=k, beta=human_beta, p=p_penalty
+    )
+    algo = DiverseTopKMallows(
+        center=algo_ranks, k=algo_k, beta=algo_beta, p=p_penalty,
+        embeddings=sushi_arr, alpha=algo_alpha, sigma=algo_sigma
+    )
+
+    util = human.collab_utility(algo, universe, utility_arr)
+
+    return (
+        human_ranks, algo_ranks, util, distance, use_human_utility, human_beta, 
+        algo_beta, algo_alpha, algo_sigma
+    )
+
+def load_combos(
+        combos: product[tuple[int, bool, float, float, float, float]],
+        furthest_ranks: dict[float, list[tuple[list[int], list[int]]]],
+        universe: list[int], algo_k: int, p_penalty: float, 
+        sushi_arr: npt.NDArray[np.float64], k: int = 10
+    ):
+        print("Creating delay generator")
+        for combo in tqdm(combos):
+            distance, *rest = combo
+            for pair in tqdm(furthest_ranks[distance], leave=False):
+                yield delayed(process_combo)(
+                    *pair, distance, *rest, universe,
+                    algo_k, p_penalty, sushi_arr, k
+                )
 
 def main():
     distances_path = "data/pref_distances.pickle"
@@ -59,8 +107,10 @@ def main():
             "price", "sold_frequency"
         ]
     )
+
+    k = 10
     sushi_arr, sushi_inds = prep_sushi(
-        sushi_df, nominal_fields, numerical_fields, drop_fields, 10
+        sushi_df, nominal_fields, numerical_fields, drop_fields, k
     )
     del sushi_df
 
@@ -75,102 +125,28 @@ def main():
     p_penalty = 0.321
     algo_k = 2
 
-    def process_combo(
-            human_ranks: list[int], algo_ranks: list[int], distance: int,
-            use_human_utility: bool, human_beta: float, algo_beta: float,
-            algo_alpha: float, algo_sigma: float
-        ):
-        utility_arr = np.zeros(11)
-        if use_human_utility:
-            utility_arr[human_ranks[0]] = 1
-        else:
-            utility_arr[algo_ranks[0]] = 1
+    chunk_size = 500000
 
-        human = TopKMallows(
-            center=human_ranks, k=10, beta=human_beta, p=p_penalty
-        )
-        algo = DiverseTopKMallows(
-            center=algo_ranks, k=algo_k, beta=algo_beta, p=p_penalty,
-            embeddings=sushi_arr, alpha=algo_alpha, sigma=algo_sigma
-        )
-
-        util = human.collab_utility(algo, universe, utility_arr)
-
-        """
-        human = None
-        algo = None
-        res = []
-        
-        for combo in combos:
-            use_human_utility, human_beta, algo_beta, algo_alpha, algo_sigma = combo
-            if use_human_utility:
-                utility_arr[human_ranks[0]] = 1
-            else:
-                utility_arr[algo_ranks[0]] = 1
-
-            if human is None:
-                human = TopKMallows(
-                    center=human_ranks, k=10, beta=human_beta, p=p_penalty
-                )
-            else:
-                human.beta = human_beta
-
-            if algo is None:
-                algo = DiverseTopKMallows(
-                    center=algo_ranks, k=algo_k, beta=algo_beta, p=p_penalty,
-                    embeddings=sushi_arr, alpha=algo_alpha, sigma=algo_sigma
-                )
-            else:
-                algo.beta = algo_beta
-                algo.alpha = algo_alpha
-                algo.sigma = algo_sigma
-                algo.prepare_sim_matrix(sushi_arr)
-
-            #print(human_ranks, algo_ranks, universe)
-            util = human.collab_utility(algo, universe, utility_arr)
-            res.append((
-                human_ranks, algo_ranks, util, distance, use_human_utility, human_beta, 
-                algo_beta, algo_alpha, algo_sigma
-            ))
-
-            if use_human_utility:
-                utility_arr[human_ranks[0]] = 0
-            else:
-                utility_arr[algo_ranks[0]] = 0
-        #"""
-
-        return (
-            human_ranks, algo_ranks, util, distance, use_human_utility, human_beta, 
-            algo_beta, algo_alpha, algo_sigma
-        )
-
-    combos = itertools.product(
+    combos = product(
         distances, human_utility_flags, human_betas, algorithm_betas, 
         algorithm_alphas, algorithm_sigmas
     )
-    def load_combos():
-        print("Creating delay generator")
-        #prev_distance = None
-        for combo in tqdm(combos):
-            distance, *rest = combo
-            for pair in tqdm(furthest_ranks[distance], leave=False):
-                yield delayed(process_combo)(*pair, distance, *rest)
-            # if distance != prev_distance:
-            #     if prev_distance in furthest_ranks:
-            #         del furthest_ranks[prev_distance]
-            #         print(f"{prev_distance} distance deleted")
-            #     prev_distance = distance
-
+    
     print("Beginning parallel call")
     res_gen = Parallel(n_jobs=-1, return_as="generator", verbose=10)(
-        load_combos()
+        load_combos(
+                combos, furthest_ranks, universe,
+                algo_k, p_penalty, sushi_arr, k
+            )
     )
     print("Parallel call generator created")
 
     schema = [
-        "Human-Ranking", "Algo-Ranking", "Utility", "Distance", "Uses-Human-Utility", "Human-Beta", "Algorithm-Beta", "Algorithm-Alpha", "Algorithm-Sigma"
+        "Human-Ranking", "Algo-Ranking", "Utility", "Distance",
+        "Uses-Human-Utility", "Human-Beta", "Algorithm-Beta",
+        "Algorithm-Alpha", "Algorithm-Sigma"
     ]
-    chunk_size = 500000
+    
     chunk = []
     for res in res_gen:
         chunk.append(res)
