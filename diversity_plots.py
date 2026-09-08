@@ -44,7 +44,11 @@ def create_plot(df: pl.DataFrame, title: str, path: str):
     plt.savefig(path)
 
 def main():
-    diverse_df = pl.read_parquet("./data/diversity_utilities")
+    diverse_data_path = "./data/diversity_utilities"
+    human_sufficient_path = "./plots/human_sufficient.png"
+    algo_sufficient_path = "./plots/algorithm_sufficient.png"
+
+    diverse_df = pl.read_parquet(diverse_data_path)
 
     prepped_diverse_df = diverse_df.with_columns(
         ("Hβ: " + pl.concat_str([
@@ -61,7 +65,7 @@ def main():
             pl.col("Uses-Human-Utility") == True,
         ),
         "Utility for Sufficient Human Views",
-        "plots/human_sufficient.png"
+        human_sufficient_path
     )
 
     create_plot(
@@ -69,7 +73,7 @@ def main():
             pl.col("Uses-Human-Utility") == False,
         ),
         "Utility for Sufficient Algorithm Views",
-        "plots/algorithm_sufficient.png"
+        algo_sufficient_path
     )
 
 if __name__ == "__main__":
